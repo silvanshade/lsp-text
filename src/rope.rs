@@ -120,7 +120,17 @@ impl RopeExt for Rope {
         let old_end = self.lsp_position_to_core(range.end)?;
 
         let new_end_byte = start.byte as usize + text_end_byte_idx;
-        let new_end_position = self.byte_to_tree_sitter_point(new_end_byte)?;
+        let new_end_position = {
+            if new_end_byte >= self.len_bytes() {
+                let line_idx = text.lines().count();
+                let line_byte_idx = ropey::str_utils::line_to_byte_idx(text, line_idx);
+                let row = u32::try_from(self.len_lines() + line_idx).unwrap();
+                let column = u32::try_from(text_end_byte_idx - line_byte_idx)?;
+                Ok(tree_sitter::Point::new(row, column))
+            } else {
+                self.byte_to_tree_sitter_point(new_end_byte)
+            }
+        }?;
 
         let input_edit = {
             let start_byte = start.byte;
