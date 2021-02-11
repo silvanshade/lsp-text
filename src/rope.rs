@@ -1,7 +1,7 @@
 use crate::text::{TextEdit, TextPosition};
 use bytes::Bytes;
 use ropey::{iter::Chunks, Rope};
-use std::{borrow::Cow, convert::TryFrom};
+use std::{borrow::Cow, convert::TryFrom, sync::Arc};
 
 trait ChunkExt<'a> {
     fn next_str(&mut self) -> &'a str;
@@ -19,7 +19,7 @@ impl<'a> ChunkExt<'a> for Chunks<'a> {
 }
 
 pub struct ChunkWalker {
-    rope: Rope,
+    rope: Arc<Rope>,
     cursor: usize,
     cursor_chunk: &'static str,
     chunks: Chunks<'static>,
@@ -175,12 +175,13 @@ impl RopeExt for Rope {
 
     #[allow(unsafe_code)]
     fn chunk_walker(self, byte_idx: usize) -> ChunkWalker {
-        let this: &'static Rope = unsafe { std::mem::transmute::<_, _>(&self) };
-        let (mut chunks, chunk_byte_idx, ..) = this.chunks_at_byte(byte_idx);
+        let rope = Arc::new(self);
+        // NOTE: safe because `rope` is owned by the resulting `ChunkWalker` and won't be dropped early
+        let (mut chunks, chunk_byte_idx, ..) = unsafe { (&*Arc::as_ptr(&rope)).chunks_at_byte(byte_idx) };
         let cursor = chunk_byte_idx;
         let cursor_chunk = chunks.next_str();
         ChunkWalker {
-            rope: self,
+            rope,
             cursor,
             cursor_chunk,
             chunks,
