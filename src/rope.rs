@@ -70,16 +70,16 @@ impl ChunkWalker {
 
     #[cfg(all(not(target_arch = "wasm32"), feature = "tree-sitter"))]
     #[inline]
-    pub fn callback_adapter_for_tree_sitter(mut self) -> impl FnMut(u32, tree_sitter::Point) -> Bytes {
-        move |start_index, _position| self.callback_adapter(start_index, None)
+    pub fn callback_adapter_for_tree_sitter(self) -> impl FnMut(u32, tree_sitter::Point) -> Bytes {
+        let mut adapter = self.callback_adapter();
+        move |start_index, _position| adapter(start_index, None)
     }
 
     #[cfg(all(target_arch = "wasm32", feature = "tree-sitter"))]
     #[inline]
-    pub fn callback_adapter_for_tree_sitter(
-        mut self,
-    ) -> impl FnMut(u32, Option<tree_sitter::Point>, Option<u32>) -> Bytes {
-        move |start_index, _position, end_index| self.callback_adapter(start_index, Some(end_index))
+    pub fn callback_adapter_for_tree_sitter(self) -> impl FnMut(u32, Option<tree_sitter::Point>, Option<u32>) -> Bytes {
+        let mut adapter = self.callback_adapter();
+        move |start_index, _position, end_index| adapter(start_index, Some(end_index))
     }
 }
 
