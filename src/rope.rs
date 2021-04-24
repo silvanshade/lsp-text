@@ -1,7 +1,10 @@
 use crate::text::{TextEdit, TextPosition};
 use bytes::Bytes;
 use ropey::{iter::Chunks, Rope};
-use std::{borrow::Cow, convert::TryFrom, sync::Arc};
+use std::{convert::TryFrom, sync::Arc};
+
+#[cfg(feature = "tree-sitter")]
+use std::borrow::Cow;
 
 trait ChunkExt<'a> {
     fn next_str(&mut self) -> &'a str;
@@ -26,6 +29,7 @@ pub struct ChunkWalker {
 }
 
 impl ChunkWalker {
+    #[inline]
     fn prev_chunk(&mut self) {
         self.cursor -= self.cursor_chunk.len();
         self.cursor_chunk = self.chunks.prev_str();
@@ -34,6 +38,7 @@ impl ChunkWalker {
         }
     }
 
+    #[inline]
     fn next_chunk(&mut self) {
         self.cursor += self.cursor_chunk.len();
         self.cursor_chunk = self.chunks.next_str();
@@ -42,10 +47,13 @@ impl ChunkWalker {
         }
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
-    pub fn callback_adapter(mut self) -> impl FnMut(u32, tree_sitter::Point) -> Bytes {
-        move |start_index, _position| {
+    #[inline]
+    pub fn callback_adapter(mut self) -> impl FnMut(u32, Option<u32>) -> Bytes {
+        move |start_index, end_index| {
+            let bytes = self.cursor_chunk.as_bytes();
+
             let start_index = start_index as usize;
+            let end_index = end_index.map(|i| i as usize).unwrap_or(bytes.len() - 1);
 
             while start_index < self.cursor && 0 < self.cursor {
                 self.prev_chunk();
@@ -55,30 +63,23 @@ impl ChunkWalker {
                 self.next_chunk();
             }
 
-            let bytes = self.cursor_chunk.as_bytes();
-            let bytes = &bytes[start_index - self.cursor ..];
+            let bytes = &bytes[start_index - self.cursor .. end_index];
             Bytes::from_static(bytes)
         }
     }
 
-    #[cfg(target_arch = "wasm32")]
-    pub fn callback_adapter(mut self) -> impl FnMut(u32, Option<tree_sitter::Point>, Option<u32>) -> Bytes {
-        move |start_index, _position, end_index| {
-            let start_index = start_index as usize;
+    #[cfg(all(not(target_arch = "wasm32"), feature = "tree-sitter"))]
+    #[inline]
+    pub fn callback_adapter_for_tree_sitter(mut self) -> impl FnMut(u32, tree_sitter::Point) -> Bytes {
+        move |start_index, _position| self.callback_adapter(start_index, None)
+    }
 
-            while start_index < self.cursor && 0 < self.cursor {
-                self.prev_chunk();
-            }
-
-            while start_index >= self.cursor + self.cursor_chunk.len() && start_index < self.rope.len_bytes() {
-                self.next_chunk();
-            }
-
-            let bytes = self.cursor_chunk.as_bytes();
-            let end_index = end_index.map(|i| i as usize).unwrap_or_else(|| bytes.len());
-            let bytes = &bytes[start_index - self.cursor .. end_index];
-            Bytes::from_static(bytes)
-        }
+    #[cfg(all(target_arch = "wasm32", feature = "tree-sitter"))]
+    #[inline]
+    pub fn callback_adapter_for_tree_sitter(
+        mut self,
+    ) -> impl FnMut(u32, Option<tree_sitter::Point>, Option<u32>) -> Bytes {
+        move |start_index, _position, end_index| self.callback_adapter(start_index, Some(end_index))
     }
 }
 
@@ -86,12 +87,16 @@ pub trait RopeExt {
     fn apply_edit(&mut self, edit: &TextEdit);
     fn build_edit<'a>(&self, change: &'a lsp::TextDocumentContentChangeEvent) -> anyhow::Result<TextEdit<'a>>;
     fn byte_to_lsp_position(&self, offset: usize) -> lsp::Position;
+    #[cfg(feature = "tree-sitter")]
     fn byte_to_tree_sitter_point(&self, offset: usize) -> anyhow::Result<tree_sitter::Point>;
     fn chunk_walker(self, byte_idx: usize) -> ChunkWalker;
     fn lsp_position_to_core(&self, position: lsp::Position) -> anyhow::Result<TextPosition>;
     fn lsp_position_to_utf16_cu(&self, position: lsp::Position) -> anyhow::Result<u32>;
+    #[cfg(feature = "tree-sitter")]
     fn lsp_range_to_tree_sitter_range(&self, range: lsp::Range) -> anyhow::Result<tree_sitter::Range>;
+    #[cfg(feature = "tree-sitter")]
     fn tree_sitter_range_to_lsp_range(&self, range: tree_sitter::Range) -> lsp::Range;
+    #[cfg(feature = "tree-sitter")]
     fn utf8_text_for_tree_sitter_node<'rope, 'tree>(&'rope self, node: &tree_sitter::Node<'tree>) -> Cow<'rope, str>;
 }
 
@@ -119,7 +124,10 @@ impl RopeExt for Rope {
         let start = self.lsp_position_to_core(range.start)?;
         let old_end = self.lsp_position_to_core(range.end)?;
 
+        #[cfg(feature = "tree-sitter")]
         let new_end_byte = start.byte as usize + text_end_byte_idx;
+
+        #[cfg(feature = "tree-sitter")]
         let new_end_position = {
             if new_end_byte >= self.len_bytes() {
                 let line_idx = text.lines().count();
@@ -132,6 +140,7 @@ impl RopeExt for Rope {
             }
         }?;
 
+        #[cfg(feature = "tree-sitter")]
         let input_edit = {
             let start_byte = start.byte;
             let old_end_byte = old_end.byte;
@@ -149,6 +158,7 @@ impl RopeExt for Rope {
         };
 
         Ok(TextEdit {
+            #[cfg(feature = "tree-sitter")]
             input_edit,
             start_char_idx: start.char as usize,
             end_char_idx: old_end.char as usize,
@@ -175,6 +185,7 @@ impl RopeExt for Rope {
         lsp::Position::new(line as u32, character as u32)
     }
 
+    #[cfg(feature = "tree-sitter")]
     fn byte_to_tree_sitter_point(&self, byte_idx: usize) -> anyhow::Result<tree_sitter::Point> {
         let line_idx = self.byte_to_line(byte_idx);
         let line_byte_idx = self.line_to_byte(line_idx);
@@ -183,10 +194,10 @@ impl RopeExt for Rope {
         Ok(tree_sitter::Point::new(row, column))
     }
 
-    #[allow(unsafe_code)]
     fn chunk_walker(self, byte_idx: usize) -> ChunkWalker {
         let rope = Arc::new(self);
         // NOTE: safe because `rope` is owned by the resulting `ChunkWalker` and won't be dropped early
+        #[allow(unsafe_code)]
         let (mut chunks, chunk_byte_idx, ..) = unsafe { (&*Arc::as_ptr(&rope)).chunks_at_byte(byte_idx) };
         let cursor = chunk_byte_idx;
         let cursor_chunk = chunks.next_str();
@@ -211,6 +222,7 @@ impl RopeExt for Rope {
 
         let row_code_idx = self.char_to_utf16_cu(row_char_idx);
 
+        #[cfg(feature = "tree-sitter")]
         let point = {
             let row = position.line;
             let col = u32::try_from(col_byte_idx)?;
@@ -221,6 +233,7 @@ impl RopeExt for Rope {
             char: u32::try_from(row_char_idx + col_char_idx)?,
             byte: u32::try_from(row_byte_idx + col_byte_idx)?,
             code: u32::try_from(row_code_idx + col_code_idx)?,
+            #[cfg(feature = "tree-sitter")]
             point,
         })
     }
@@ -236,6 +249,7 @@ impl RopeExt for Rope {
         Ok(result)
     }
 
+    #[cfg(feature = "tree-sitter")]
     fn lsp_range_to_tree_sitter_range(&self, range: lsp::Range) -> anyhow::Result<tree_sitter::Range> {
         let start = self.lsp_position_to_core(range.start)?;
         let end = self.lsp_position_to_core(range.end)?;
@@ -243,12 +257,14 @@ impl RopeExt for Rope {
         Ok(range)
     }
 
+    #[cfg(feature = "tree-sitter")]
     fn tree_sitter_range_to_lsp_range(&self, range: tree_sitter::Range) -> lsp::Range {
         let start = self.byte_to_lsp_position(range.start_byte() as usize);
         let end = self.byte_to_lsp_position(range.end_byte() as usize);
         lsp::Range::new(start, end)
     }
 
+    #[cfg(feature = "tree-sitter")]
     fn utf8_text_for_tree_sitter_node<'rope, 'tree>(&'rope self, node: &tree_sitter::Node<'tree>) -> Cow<'rope, str> {
         let start = self.byte_to_char(node.start_byte() as usize);
         let end = self.byte_to_char(node.end_byte() as usize);
