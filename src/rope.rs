@@ -50,10 +50,7 @@ impl ChunkWalker {
     #[inline]
     pub fn callback_adapter(mut self) -> impl FnMut(u32, Option<u32>) -> Bytes {
         move |start_index, end_index| {
-            let bytes = self.cursor_chunk.as_bytes();
-
             let start_index = start_index as usize;
-            let end_index = end_index.map(|i| i as usize).unwrap_or(bytes.len() - 1);
 
             while start_index < self.cursor && 0 < self.cursor {
                 self.prev_chunk();
@@ -63,6 +60,8 @@ impl ChunkWalker {
                 self.next_chunk();
             }
 
+            let bytes = self.cursor_chunk.as_bytes();
+            let end_index = end_index.map(|i| i as usize).unwrap_or(bytes.len());
             let bytes = &bytes[start_index - self.cursor .. end_index];
             Bytes::from_static(bytes)
         }
@@ -79,7 +78,7 @@ impl ChunkWalker {
     #[inline]
     pub fn callback_adapter_for_tree_sitter(self) -> impl FnMut(u32, Option<tree_sitter::Point>, Option<u32>) -> Bytes {
         let mut adapter = self.callback_adapter();
-        move |start_index, _position, end_index| adapter(start_index, Some(end_index))
+        move |start_index, _position, end_index| adapter(start_index, end_index)
     }
 }
 
