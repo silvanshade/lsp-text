@@ -49,11 +49,8 @@ impl ChunkWalker {
 
     #[inline]
     pub fn callback_adapter(mut self) -> impl FnMut(u32, Option<u32>) -> Bytes {
-        move |start_index, end_index| {
-            let bytes = self.cursor_chunk.as_bytes();
-
+        move |start_index, _end_index| {
             let start_index = start_index as usize;
-            let end_index = end_index.map(|i| i as usize).unwrap_or(bytes.len() - 1);
 
             while start_index < self.cursor && 0 < self.cursor {
                 self.prev_chunk();
@@ -63,7 +60,8 @@ impl ChunkWalker {
                 self.next_chunk();
             }
 
-            let bytes = &bytes[start_index - self.cursor .. end_index];
+            let bytes = self.cursor_chunk.as_bytes();
+            let bytes = &bytes[start_index - self.cursor ..];
             Bytes::from_static(bytes)
         }
     }
