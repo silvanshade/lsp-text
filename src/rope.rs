@@ -102,7 +102,7 @@ impl RopeExt for Rope {
     fn apply_edit(&mut self, edit: &TextEdit) {
         self.remove(edit.start_char_idx .. edit.end_char_idx);
         if !edit.text.is_empty() {
-            self.insert(edit.start_char_idx, &edit.text);
+            self.insert(edit.start_char_idx, edit.text);
         }
     }
 
