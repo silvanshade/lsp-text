@@ -22,7 +22,7 @@ ropey = "1.2"
 
 [dependencies.tree-sitter]
 package = "tree-sitter-facade"
-version = "0.3"
+version = "0.4"
 optional = true
 
 [dev-dependencies]
